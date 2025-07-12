@@ -1,0 +1,131 @@
+import hashlib
+import datetime
+import sqlite3
+import logging
+
+class UserAuthentication:
+    """Handles user authentication and session management"""
+    
+    def __init__(self, db_path='users.db'):
+        self.db_path = db_path
+        self.init_database()
+        
+    def init_database(self):
+        """Initialize user database"""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS users (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                username TEXT UNIQUE NOT NULL,
+                password_hash TEXT NOT NULL,
+                email TEXT UNIQUE NOT NULL,
+                role TEXT DEFAULT 'user',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                last_login TIMESTAMP
+            )
+        ''')
+        
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS sessions (
+                session_id TEXT PRIMARY KEY,
+                user_id INTEGER,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                expires_at TIMESTAMP,
+                FOREIGN KEY (user_id) REFERENCES users (id)
+            )
+        ''')
+        conn.commit()
+        conn.close()
+    
+    def hash_password(self, password):
+        """Hash password using SHA-256"""
+        return hashlib.sha256(password.encode()).hexdigest()
+    
+    def register_user(self, username, password, email, role='user'):
+        """Register a new user"""
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            
+            password_hash = self.hash_password(password)
+            cursor.execute('''
+                INSERT INTO users (username, password_hash, email, role)
+                VALUES (?, ?, ?, ?)
+            ''', (username, password_hash, email, role))
+            
+            conn.commit()
+            conn.close()
+            logging.info(f"User {username} registered successfully")
+            return True
+        except sqlite3.IntegrityError:
+            logging.warning(f"Registration failed: Username or email already exists")
+            return False
+    
+    def authenticate_user(self, username, password):
+        """Authenticate user credentials"""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        
+        password_hash = self.hash_password(password)
+        cursor.execute('''
+            SELECT id, username, role FROM users 
+            WHERE username = ? AND password_hash = ?
+        ''', (username, password_hash))
+        
+        user = cursor.fetchone()
+        
+        if user:
+            # Update last login
+            cursor.execute('''
+                UPDATE users SET last_login = CURRENT_TIMESTAMP 
+                WHERE id = ?
+            ''', (user[0],))
+            conn.commit()
+            logging.info(f"User {username} authenticated successfully")
+            
+        conn.close()
+        return user
+    
+    def get_user_by_id(self, user_id):
+        """Get user information by ID"""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        
+        cursor.execute('''
+            SELECT id, username, email, role, created_at, last_login
+            FROM users WHERE id = ?
+        ''', (user_id,))
+        
+        user = cursor.fetchone()
+        conn.close()
+        return user
+    
+    def change_password(self, username, old_password, new_password):
+        """Change user password"""
+        if self.authenticate_user(username, old_password):
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            
+            new_password_hash = self.hash_password(new_password)
+            cursor.execute('''
+                UPDATE users SET password_hash = ? WHERE username = ?
+            ''', (new_password_hash, username))
+            
+            conn.commit()
+            conn.close()
+            logging.info(f"Password changed for user {username}")
+            return True
+        return False
+    
+    def delete_user(self, username):
+        """Delete user account"""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        
+        cursor.execute('DELETE FROM users WHERE username = ?', (username,))
+        
+        conn.commit()
+        conn.close()
+        logging.info(f"User {username} deleted")
+        return True
